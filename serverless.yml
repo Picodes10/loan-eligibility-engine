@@ -1,0 +1,156 @@
+service: loan-eligibility-engine
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  timeout: 900
+  memorySize: 1024
+  
+  environment:
+    POSTGRES_HOST: ${self:custom.postgres.host}
+    POSTGRES_DB: ${self:custom.postgres.db}
+    POSTGRES_USER: ${self:custom.postgres.user}
+    POSTGRES_PASSWORD: ${self:custom.postgres.password}
+    N8N_WEBHOOK_URL: ${self:custom.n8n.webhookUrl}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+          Resource: "arn:aws:s3:::${self:custom.s3Bucket}/*"
+        - Effect: Allow
+          Action:
+            - s3:ListBucket
+          Resource: "arn:aws:s3:::${self:custom.s3Bucket}"
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - rds:DescribeDBInstances
+            - rds:Connect
+          Resource: "*"
+
+custom:
+  s3Bucket: ${self:service}-${self:provider.stage}-uploads
+  postgres:
+    host: ${env:POSTGRES_HOST}
+    db: ${env:POSTGRES_DB, 'loan_engine'}
+    user: ${env:POSTGRES_USER, 'admin'}
+    password: ${env:POSTGRES_PASSWORD}
+  n8n:
+    webhookUrl: ${env:N8N_WEBHOOK_URL}
+
+functions:
+  csvUploadHandler:
+    handler: lambda_functions.csv_upload_handler.handler
+    events:
+      - http:
+          path: /upload-csv
+          method: post
+          cors: true
+    environment:
+      S3_BUCKET: ${self:custom.s3Bucket}
+      
+  csvProcessor:
+    handler: lambda_functions.csv_processor.handler
+    events:
+      - s3:
+          bucket: ${self:custom.s3Bucket}
+          event: s3:ObjectCreated:*
+          rules:
+            - suffix: .csv
+    timeout: 900
+    
+  apiGateway:
+    handler: lambda_functions.api_gateway.handler
+    events:
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: /
+          method: ANY
+          cors: true
+
+resources:
+  Resources:
+    S3Bucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.s3Bucket}
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: s3:ObjectCreated:*
+              Function: !GetAtt CsvProcessorLambdaFunction.Arn
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: suffix
+                      Value: .csv
+                      
+    S3BucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref S3Bucket
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "${S3Bucket}/*"
+              
+    PostgreSQLDB:
+      Type: AWS::RDS::DBInstance
+      Properties:
+        DBInstanceIdentifier: ${self:service}-${self:provider.stage}-db
+        DBInstanceClass: db.t3.micro
+        Engine: postgres
+        EngineVersion: '15.4'
+        MasterUsername: ${self:custom.postgres.user}
+        MasterUserPassword: ${self:custom.postgres.password}
+        DBName: ${self:custom.postgres.db}
+        AllocatedStorage: 20
+        StorageType: gp2
+        VpcSecurityGroups:
+          - !Ref PostgreSQLSecurityGroup
+        PubliclyAccessible: true
+        BackupRetentionPeriod: 0
+        
+    PostgreSQLSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for PostgreSQL RDS
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: 0.0.0.0/0
+
+plugins:
+  - serverless-python-requirements
+
+package:
+  exclude:
+    - node_modules/**
+    - .git/**
+    - .pytest_cache/**
+    - __pycache__/**
+    - "*.pyc"
+    - venv/**
+    - .env
+
+  
