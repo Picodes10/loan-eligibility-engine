@@ -110,13 +110,21 @@ def process_csv_data(df: pd.DataFrame, batch_id: str) -> List[Dict[str, Any]]:
     # Clean column names
     df.columns = df.columns.str.strip().str.lower()
     
-    # Expected columns
-    expected_columns = ['user_id', 'email', 'monthly_income', 'credit_score', 'employment_status', 'age']
+    # Expected columns (required)
+    required_columns = ['user_id', 'email', 'monthly_income', 'credit_score', 'employment_status', 'age']
+    
+    # Optional columns
+    optional_columns = ['name']
     
     # Check for required columns
-    missing_columns = [col for col in expected_columns if col not in df.columns]
+    missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
         raise Exception(f"Missing required columns: {missing_columns}")
+    
+    # Log which optional columns are present
+    present_optional = [col for col in optional_columns if col in df.columns]
+    if present_optional:
+        logger.info(f"Found optional columns: {present_optional}")
     
     for index, row in df.iterrows():
         try:

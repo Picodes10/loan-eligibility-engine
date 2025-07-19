@@ -55,7 +55,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
         # Upload to S3
         s3_client = boto3.client('s3')
-        bucket_name = context.function_name.split('-')[0] + '-' + context.function_name.split('-')[1] + '-uploads'
+        bucket_name = os.getenv('S3_BUCKET', context.function_name.split('-')[0] + '-' + context.function_name.split('-')[1] + '-uploads')
         
         # If file_content is base64 encoded, decode it
         if isinstance(file_content, str) and file_content.startswith('data:'):
@@ -143,7 +143,7 @@ def get_upload_url_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any
         s3_key = f"uploads/{timestamp}_{batch_id}_{filename}"
         
         # Get bucket name from environment
-        bucket_name = context.function_name.split('-')[0] + '-' + context.function_name.split('-')[1] + '-uploads'
+        bucket_name = os.getenv('S3_BUCKET', context.function_name.split('-')[0] + '-' + context.function_name.split('-')[1] + '-uploads')
         
         # Generate presigned URL
         upload_url = generate_presigned_url(bucket_name, s3_key)

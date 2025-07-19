@@ -300,5 +300,124 @@ class DatabaseManager:
             
             cursor.execute(query, (min_income, min_credit_score, max_credit_score, age, age, employment_status))
             return [dict(row) for row in cursor.fetchall()]
-        
-        
+
+    def get_users_paginated(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get users with pagination"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT * FROM users 
+                ORDER BY created_at DESC 
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+            
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_user(self, user_data: Dict[str, Any]) -> str:
+        """Insert a single user and return user_id"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO users (user_id, email, monthly_income, credit_score, employment_status, age)
+                VALUES (%(user_id)s, %(email)s, %(monthly_income)s, %(credit_score)s, %(employment_status)s, %(age)s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    email = EXCLUDED.email,
+                    monthly_income = EXCLUDED.monthly_income,
+                    credit_score = EXCLUDED.credit_score,
+                    employment_status = EXCLUDED.employment_status,
+                    age = EXCLUDED.age,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING user_id
+            """
+            
+            cursor.execute(insert_query, user_data)
+            return cursor.fetchone()[0]
+
+    def get_users_by_ids(self, user_ids: List[str]) -> List[Dict[str, Any]]:
+        """Get users by their IDs"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            placeholders = ','.join(['%s'] * len(user_ids))
+            query = f"""
+                SELECT * FROM users 
+                WHERE user_id IN ({placeholders})
+            """
+            
+            cursor.execute(query, user_ids)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_match(self, match_data: Dict[str, Any]) -> int:
+        """Insert a single match"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO matches (user_id, product_id, match_score, match_reasons)
+                VALUES (%(user_id)s, %(product_id)s, %(match_score)s, %(match_reasons)s)
+                ON CONFLICT (user_id, product_id) DO UPDATE SET
+                    match_score = EXCLUDED.match_score,
+                    match_reasons = EXCLUDED.match_reasons,
+                    created_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.execute(insert_query, match_data)
+            return cursor.rowcount
+
+    def test_connection(self) -> bool:
+        """Test database connection"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                return True
+        except Exception as e:
+            logger.error(f"Database connection test failed: {str(e)}")
+            return False
+
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get system statistics"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            stats = {}
+            
+            # Total users
+            cursor.execute("SELECT COUNT(*) as count FROM users")
+            stats['total_users'] = cursor.fetchone()['count']
+            
+            # Total products
+            cursor.execute("SELECT COUNT(*) as count FROM loan_products")
+            stats['total_products'] = cursor.fetchone()['count']
+            
+            # Total matches
+            cursor.execute("SELECT COUNT(*) as count FROM matches")
+            stats['total_matches'] = cursor.fetchone()['count']
+            
+            # Recent matches (last 24 hours)
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM matches 
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+            """)
+            stats['recent_matches'] = cursor.fetchone()['count']
+            
+            return stats
+
+    def get_recent_matches(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent matches for display"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT m.*, u.email, lp.product_name, lp.provider, lp.interest_rate
+                FROM matches m
+                JOIN users u ON m.user_id = u.user_id
+                JOIN loan_products lp ON m.product_id = lp.id
+                ORDER BY m.created_at DESC
+                LIMIT %s
+            """
+            
+            cursor.execute(query, (limit,))
+            return [dict(row) for row in cursor.fetchall()]

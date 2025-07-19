@@ -1,0 +1,56 @@
+{
+  "name": "User Loan Matching Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "user-matching",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-matching",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "user-matching-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract batch_id from webhook payload and validate\nconst webhookData = $input.first().json;\nconst batchId = webhookData.batch_id;\n\nconsole.log('Received webhook for user-loan matching:', webhookData);\n\nif (!batchId) {\n  throw new Error('batch_id is required in webhook payload');\n}\n\nreturn [{\n  json: {\n    batch_id: batchId,\n    trigger_type: webhookData.trigger_type || 'manual',\n    records_processed: webhookData.records_processed || 0,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "process-webhook-data",
+      "name": "Process Webhook Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT user_id, email, monthly_income, credit_score, employment_status, age, created_at FROM users WHERE updated_at >= NOW() - INTERVAL '1 hour' ORDER BY updated_at DESC LIMIT 1000"
+      },
+      "id": "fetch-new-users",
+      "name": "Fetch New Users",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        680,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main-db",
+          "name": "PostgreSQL Main Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute"
