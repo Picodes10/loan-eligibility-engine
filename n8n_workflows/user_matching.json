@@ -1,0 +1,135 @@
+{
+  "name": "User-Loan Matching Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook-match-users"
+      },
+      "id": "webhook-trigger-123",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": "public",
+        "table": "users",
+        "columns": "user_id,email,monthly_income,credit_score,employment_status,age"
+      },
+      "id": "fetch-users-456",
+      "name": "Fetch Users",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        460,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": "public",
+        "table": "loan_products",
+        "columns": "*"
+      },
+      "id": "fetch-products-789",
+      "name": "Fetch Products",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simple matching algorithm\nconst users = $input.all()[0].json;\nconst products = $input.all()[1].json;\nconst matches = [];\n\nusers.forEach(user => {\n  products.forEach(product => {\n    let matchScore = 0;\n    const reasons = [];\n    \n    // Basic matching logic\n    if (user.credit_score >= product.min_credit_score) {\n      matchScore += 30;\n      reasons.push('Credit score meets requirement');\n    }\n    \n    if (user.monthly_income >= product.min_income) {\n      matchScore += 25;\n      reasons.push('Income meets requirement');\n    }\n    \n    if (user.age >= product.min_age && user.age <= product.max_age) {\n      matchScore += 15;\n      reasons.push('Age within range');\n    }\n    \n    if (!product.employment_required || user.employment_status === 'employed') {\n      matchScore += 15;\n      reasons.push('Employment status suitable');\n    }\n    \n    if (product.interest_rate <= 12) {\n      matchScore += 15;\n      reasons.push('Competitive rate');\n    }\n    \n    // Only create matches with score >= 50\n    if (matchScore >= 50) {\n      matches.push({\n        user_id: user.user_id,\n        product_id: product.id,\n        match_score: matchScore,\n        match_reasons: reasons\n      });\n    }\n  });\n});\n\nreturn matches.map(match => ({ json: match }));"
+      },
+      "id": "matching-algorithm-abc",
+      "name": "Matching Algorithm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "matches",
+        "columns": "user_id,product_id,match_score,match_reasons"
+      },
+      "id": "store-matches-def",
+      "name": "Store Matches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Users",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Users": {
+      "main": [
+        [
+          {
+            "node": "Matching Algorithm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Products": {
+      "main": [
+        [
+          {
+            "node": "Matching Algorithm",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Matching Algorithm": {
+      "main": [
+        [
+          {
+            "node": "Store Matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1"
+} 
