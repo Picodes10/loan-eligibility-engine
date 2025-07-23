@@ -19,8 +19,8 @@ class DatabaseSetup:
     def __init__(self):
         self.host = os.getenv('POSTGRES_HOST', 'localhost')
         self.database = os.getenv('POSTGRES_DB', 'loan_engine')
-        self.user = os.getenv('POSTGRES_USER', 'admin')
-        self.password = os.getenv('POSTGRES_PASSWORD', 'admin123')
+        self.user = os.getenv('POSTGRES_USER', 'postgres')
+        self.password = os.getenv('POSTGRES_PASSWORD', 'postgres123')
         self.port = os.getenv('POSTGRES_PORT', '5432')
         
     def get_connection(self):
@@ -31,7 +31,8 @@ class DatabaseSetup:
                 database=self.database,
                 user=self.user,
                 password=self.password,
-                port=self.port
+                port=self.port,
+                connect_timeout=10
             )
             return conn
         except psycopg2.Error as e:
@@ -47,7 +48,8 @@ class DatabaseSetup:
                 database='postgres',
                 user=self.user,
                 password=self.password,
-                port=self.port
+                port=self.port,
+                connect_timeout=10
             )
             conn.autocommit = True
             cursor = conn.cursor()

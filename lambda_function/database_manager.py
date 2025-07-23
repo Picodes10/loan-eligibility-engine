@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self):
-        self.host = os.getenv('POSTGRES_HOST')
+        self.host = os.getenv('POSTGRES_HOST', 'localhost')
         self.database = os.getenv('POSTGRES_DB', 'loan_engine')
-        self.user = os.getenv('POSTGRES_USER', 'admin')
-        self.password = os.getenv('POSTGRES_PASSWORD')
+        self.user = os.getenv('POSTGRES_USER', 'postgres')
+        self.password = os.getenv('POSTGRES_PASSWORD', 'postgres123')
         self.port = os.getenv('POSTGRES_PORT', '5432')
         
     @contextmanager
@@ -27,7 +27,8 @@ class DatabaseManager:
                 database=self.database,
                 user=self.user,
                 password=self.password,
-                port=self.port
+                port=self.port,
+                connect_timeout=10
             )
             yield conn
             conn.commit()
