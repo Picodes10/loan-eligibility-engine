@@ -1,21 +1,15 @@
-#!/usr/bin/env python3
-"""
-Database Setup Script for Loan Eligibility Engine
-This script initializes the PostgreSQL database with required tables and sample data.
-"""
-
 import os
-import sys
 import psycopg2
-import logging
-from datetime import datetime
+from psycopg2.extras import RealDictCursor
+from contextlib import contextmanager
 import json
+import logging
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class DatabaseSetup:
+class DatabaseManager:
     def __init__(self):
         self.host = os.getenv('POSTGRES_HOST', 'localhost')
         self.database = os.getenv('POSTGRES_DB', 'loan_engine')
@@ -23,8 +17,10 @@ class DatabaseSetup:
         self.password = os.getenv('POSTGRES_PASSWORD', 'postgres123')
         self.port = os.getenv('POSTGRES_PORT', '5432')
         
+    @contextmanager
     def get_connection(self):
-        """Get database connection"""
+        """Context manager for database connections"""
+        conn = None
         try:
             conn = psycopg2.connect(
                 host=self.host,
@@ -34,501 +30,395 @@ class DatabaseSetup:
                 port=self.port,
                 connect_timeout=10
             )
-            return conn
-        except psycopg2.Error as e:
-            logger.error(f"Failed to connect to database: {e}")
+            yield conn
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Database error: {str(e)}")
             raise
-    
-    def create_database(self):
-        """Create database if it doesn't exist"""
-        try:
-            # Connect to default postgres database
-            conn = psycopg2.connect(
-                host=self.host,
-                database='postgres',
-                user=self.user,
-                password=self.password,
-                port=self.port,
-                connect_timeout=10
-            )
-            conn.autocommit = True
+        finally:
+            if conn:
+                conn.close()
+
+    def initialize_database(self):
+        """Initialize database with required tables"""
+        with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Check if database exists
-            cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (self.database,))
-            exists = cursor.fetchone()
-            
-            if not exists:
-                logger.info(f"Creating database: {self.database}")
-                cursor.execute(f"CREATE DATABASE {self.database}")
-                logger.info("Database created successfully")
-            else:
-                logger.info(f"Database {self.database} already exists")
-            
-            cursor.close()
-            conn.close()
-            
-        except psycopg2.Error as e:
-            logger.error(f"Failed to create database: {e}")
-            raise
-    
-    def create_tables(self):
-        """Create all required tables"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        try:
-            logger.info("Creating database tables...")
-            
-            # Read schema from file
-            schema_file = os.path.join(os.path.dirname(__file__), '..', 'config', 'db_schema.sql')
-            
-            if os.path.exists(schema_file):
-                with open(schema_file, 'r') as f:
-                    schema_sql = f.read()
-                
-                # Split and execute SQL statements
-                statements = schema_sql.split(';')
-                for statement in statements:
-                    statement = statement.strip()
-                    if statement and not statement.startswith('--'):
-                        cursor.execute(statement)
-                
-                conn.commit()
-                logger.info("Database tables created successfully")
-            else:
-                logger.warning("Schema file not found, creating basic tables...")
-                self.create_basic_tables(cursor)
-                conn.commit()
-                
-        except psycopg2.Error as e:
-            conn.rollback()
-            logger.error(f"Failed to create tables: {e}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
-    
-    def create_basic_tables(self, cursor):
-        """Create basic tables if schema file is not available"""
-        
-        # Users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(100) UNIQUE NOT NULL,
-                email VARCHAR(255) NOT NULL,
-                monthly_income DECIMAL(12,2),
-                credit_score INTEGER CHECK (credit_score >= 300 AND credit_score <= 850),
-                employment_status VARCHAR(100) CHECK (employment_status IN ('employed', 'unemployed', 'self-employed', 'student', 'retired')),
-                age INTEGER CHECK (age >= 18 AND age <= 100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Loan products table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS loan_products (
-                id SERIAL PRIMARY KEY,
-                product_name VARCHAR(255) NOT NULL,
-                provider VARCHAR(255) NOT NULL,
-                interest_rate DECIMAL(5,2) CHECK (interest_rate >= 0),
-                min_income DECIMAL(12,2) CHECK (min_income >= 0),
-                min_credit_score INTEGER CHECK (min_credit_score >= 300 AND min_credit_score <= 850),
-                max_credit_score INTEGER CHECK (max_credit_score >= 300 AND max_credit_score <= 850),
-                min_age INTEGER CHECK (min_age >= 18),
-                max_age INTEGER CHECK (max_age <= 100),
-                employment_required BOOLEAN DEFAULT FALSE,
-                max_amount DECIMAL(12,2),
-                min_amount DECIMAL(12,2),
-                tenure_months INTEGER,
-                url VARCHAR(500),
-                eligibility_criteria JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(product_name, provider)
-            )
-        """)
-        
-        # Matches table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS matches (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(100) NOT NULL,
-                product_id INTEGER NOT NULL,
-                match_score DECIMAL(5,2) CHECK (match_score >= 0 AND match_score <= 100),
-                match_reasons JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES loan_products(id) ON DELETE CASCADE,
-                UNIQUE(user_id, product_id)
-            )
-        """)
-        
-        # Processing logs table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS processing_logs (
-                id SERIAL PRIMARY KEY,
-                batch_id VARCHAR(100) NOT NULL,
-                operation VARCHAR(100) NOT NULL,
-                status VARCHAR(50) NOT NULL CHECK (status IN ('started', 'in_progress', 'completed', 'failed')),
-                records_processed INTEGER DEFAULT 0,
-                errors JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Email notifications table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS email_notifications (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(100) NOT NULL,
-                email VARCHAR(255) NOT NULL,
-                subject VARCHAR(500),
-                body TEXT,
-                status VARCHAR(50) DEFAULT 'sent' CHECK (status IN ('pending', 'sent', 'failed')),
-                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                match_count INTEGER DEFAULT 0
-            )
-        """)
-        
-        # Create indexes
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
-            CREATE INDEX IF NOT EXISTS idx_users_credit_score ON users(credit_score);
-            CREATE INDEX IF NOT EXISTS idx_users_income ON users(monthly_income);
-            CREATE INDEX IF NOT EXISTS idx_loan_products_provider ON loan_products(provider);
-            CREATE INDEX IF NOT EXISTS idx_matches_user_id ON matches(user_id);
-            CREATE INDEX IF NOT EXISTS idx_matches_product_id ON matches(product_id);
-            CREATE INDEX IF NOT EXISTS idx_processing_logs_batch_id ON processing_logs(batch_id);
-        """)
-        
-        logger.info("Basic tables created successfully")
-    
-    def insert_sample_data(self):
-        """Insert sample loan products and users"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        try:
-            logger.info("Inserting sample data...")
-            
-            # Sample loan products
-            sample_products = [
-                {
-                    'product_name': 'Personal Loan Plus',
-                    'provider': 'BankABC',
-                    'interest_rate': 8.99,
-                    'min_income': 30000,
-                    'min_credit_score': 650,
-                    'max_credit_score': 850,
-                    'min_age': 21,
-                    'max_age': 65,
-                    'employment_required': True,
-                    'max_amount': 100000,
-                    'min_amount': 5000,
-                    'tenure_months': 60,
-                    'url': 'https://bankabc.com/personal-loan-plus',
-                    'eligibility_criteria': json.dumps({
-                        'features': ['Quick approval', 'No prepayment penalty'],
-                        'documents_required': ['Salary slips', 'Bank statements']
-                    })
-                },
-                {
-                    'product_name': 'Quick Cash Loan',
-                    'provider': 'FastCredit',
-                    'interest_rate': 12.50,
-                    'min_income': 25000,
-                    'min_credit_score': 600,
-                    'max_credit_score': 800,
-                    'min_age': 18,
-                    'max_age': 60,
-                    'employment_required': True,
-                    'max_amount': 50000,
-                    'min_amount': 2000,
-                    'tenure_months': 36,
-                    'url': 'https://fastcredit.com/quick-cash',
-                    'eligibility_criteria': json.dumps({
-                        'features': ['Same day approval', 'Flexible repayment'],
-                        'documents_required': ['ID proof', 'Income proof']
-                    })
-                },
-                {
-                    'product_name': 'Premium Personal Loan',
-                    'provider': 'EliteBank',
-                    'interest_rate': 6.75,
-                    'min_income': 50000,
-                    'min_credit_score': 700,
-                    'max_credit_score': 850,
-                    'min_age': 25,
-                    'max_age': 60,
-                    'employment_required': True,
-                    'max_amount': 500000,
-                    'min_amount': 10000,
-                    'tenure_months': 84,
-                    'url': 'https://elitebank.com/premium-personal',
-                    'eligibility_criteria': json.dumps({
-                        'features': ['Lowest rates', 'Premium service'],
-                        'documents_required': ['ITR', 'Bank statements', 'Employment letter']
-                    })
-                },
-                {
-                    'product_name': 'Student Friendly Loan',
-                    'provider': 'YoungBank',
-                    'interest_rate': 15.00,
-                    'min_income': 15000,
-                    'min_credit_score': 300,
-                    'max_credit_score': 650,
-                    'min_age': 18,
-                    'max_age': 30,
-                    'employment_required': False,
-                    'max_amount': 25000,
-                    'min_amount': 1000,
-                    'tenure_months': 24,
-                    'url': 'https://youngbank.com/student-loan',
-                    'eligibility_criteria': json.dumps({
-                        'features': ['No employment required', 'Student friendly'],
-                        'documents_required': ['ID proof', 'Student ID']
-                    })
-                }
-            ]
-            
-            # Insert sample products
-            for product in sample_products:
-                cursor.execute("""
-                    INSERT INTO loan_products (
-                        product_name, provider, interest_rate, min_income, min_credit_score,
-                        max_credit_score, min_age, max_age, employment_required, max_amount,
-                        min_amount, tenure_months, url, eligibility_criteria
-                    ) VALUES (
-                        %(product_name)s, %(provider)s, %(interest_rate)s, %(min_income)s,
-                        %(min_credit_score)s, %(max_credit_score)s, %(min_age)s, %(max_age)s,
-                        %(employment_required)s, %(max_amount)s, %(min_amount)s, %(tenure_months)s,
-                        %(url)s, %(eligibility_criteria)s
-                    ) ON CONFLICT (product_name, provider) DO NOTHING
-                """, product)
-            
-            # Sample users
-            sample_users = [
-                {
-                    'user_id': 'user_001',
-                    'email': 'john.doe@example.com',
-                    'monthly_income': 75000,
-                    'credit_score': 780,
-                    'employment_status': 'employed',
-                    'age': 32
-                },
-                {
-                    'user_id': 'user_002',
-                    'email': 'jane.smith@example.com',
-                    'monthly_income': 45000,
-                    'credit_score': 720,
-                    'employment_status': 'employed',
-                    'age': 28
-                },
-                {
-                    'user_id': 'user_003',
-                    'email': 'mike.johnson@example.com',
-                    'monthly_income': 35000,
-                    'credit_score': 650,
-                    'employment_status': 'self-employed',
-                    'age': 35
-                },
-                {
-                    'user_id': 'user_004',
-                    'email': 'sarah.wilson@example.com',
-                    'monthly_income': 25000,
-                    'credit_score': 580,
-                    'employment_status': 'student',
-                    'age': 22
-                }
-            ]
-            
-            # Insert sample users
-            for user in sample_users:
-                cursor.execute("""
-                    INSERT INTO users (user_id, email, monthly_income, credit_score, employment_status, age)
-                    VALUES (%(user_id)s, %(email)s, %(monthly_income)s, %(credit_score)s, %(employment_status)s, %(age)s)
-                    ON CONFLICT (user_id) DO NOTHING
-                """, user)
-            
-            conn.commit()
-            logger.info("Sample data inserted successfully")
-            
-        except psycopg2.Error as e:
-            conn.rollback()
-            logger.error(f"Failed to insert sample data: {e}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
-    
-    def create_views(self):
-        """Create useful database views"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        try:
-            logger.info("Creating database views...")
-            
-            # User matches view
+            # Create users table
             cursor.execute("""
-                CREATE OR REPLACE VIEW user_matches_view AS
-                SELECT 
-                    u.user_id,
-                    u.email,
-                    u.monthly_income,
-                    u.credit_score,
-                    u.employment_status,
-                    u.age,
-                    lp.product_name,
-                    lp.provider,
-                    lp.interest_rate,
-                    lp.min_amount,
-                    lp.max_amount,
-                    lp.tenure_months,
-                    lp.url,
-                    m.match_score,
-                    m.match_reasons,
-                    m.created_at as matched_at
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100) UNIQUE NOT NULL,
+                    email VARCHAR(255) NOT NULL,
+                    monthly_income DECIMAL(12,2),
+                    credit_score INTEGER,
+                    employment_status VARCHAR(100),
+                    age INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create loan_products table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS loan_products (
+                    id SERIAL PRIMARY KEY,
+                    product_name VARCHAR(255) NOT NULL,
+                    provider VARCHAR(255) NOT NULL,
+                    interest_rate DECIMAL(5,2),
+                    min_income DECIMAL(12,2),
+                    min_credit_score INTEGER,
+                    max_credit_score INTEGER,
+                    min_age INTEGER,
+                    max_age INTEGER,
+                    employment_required BOOLEAN DEFAULT FALSE,
+                    max_amount DECIMAL(12,2),
+                    min_amount DECIMAL(12,2),
+                    tenure_months INTEGER,
+                    url VARCHAR(500),
+                    eligibility_criteria JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create matches table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS matches (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100) NOT NULL,
+                    product_id INTEGER NOT NULL,
+                    match_score DECIMAL(5,2),
+                    match_reasons JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (product_id) REFERENCES loan_products(id),
+                    UNIQUE(user_id, product_id)
+                )
+            """)
+            
+            # Create processing_logs table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processing_logs (
+                    id SERIAL PRIMARY KEY,
+                    batch_id VARCHAR(100) NOT NULL,
+                    operation VARCHAR(100) NOT NULL,
+                    status VARCHAR(50) NOT NULL,
+                    records_processed INTEGER DEFAULT 0,
+                    errors JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create indexes
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
+                CREATE INDEX IF NOT EXISTS idx_users_credit_score ON users(credit_score);
+                CREATE INDEX IF NOT EXISTS idx_users_income ON users(monthly_income);
+                CREATE INDEX IF NOT EXISTS idx_loan_products_provider ON loan_products(provider);
+                CREATE INDEX IF NOT EXISTS idx_matches_user_id ON matches(user_id);
+                CREATE INDEX IF NOT EXISTS idx_matches_product_id ON matches(product_id);
+                CREATE INDEX IF NOT EXISTS idx_processing_logs_batch_id ON processing_logs(batch_id);
+            """)
+            
+            logger.info("Database initialized successfully")
+
+    def insert_users_batch(self, users_data: List[Dict[str, Any]]) -> int:
+        """Insert multiple users with conflict resolution"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO users (user_id, email, monthly_income, credit_score, employment_status, age)
+                VALUES (%(user_id)s, %(email)s, %(monthly_income)s, %(credit_score)s, %(employment_status)s, %(age)s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    email = EXCLUDED.email,
+                    monthly_income = EXCLUDED.monthly_income,
+                    credit_score = EXCLUDED.credit_score,
+                    employment_status = EXCLUDED.employment_status,
+                    age = EXCLUDED.age,
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.executemany(insert_query, users_data)
+            return cursor.rowcount
+
+    def insert_loan_products_batch(self, products_data: List[Dict[str, Any]]) -> int:
+        """Insert multiple loan products with conflict resolution"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO loan_products (
+                    product_name, provider, interest_rate, min_income, min_credit_score, 
+                    max_credit_score, min_age, max_age, employment_required, max_amount, 
+                    min_amount, tenure_months, url, eligibility_criteria
+                ) VALUES (
+                    %(product_name)s, %(provider)s, %(interest_rate)s, %(min_income)s, 
+                    %(min_credit_score)s, %(max_credit_score)s, %(min_age)s, %(max_age)s, 
+                    %(employment_required)s, %(max_amount)s, %(min_amount)s, %(tenure_months)s, 
+                    %(url)s, %(eligibility_criteria)s
+                ) ON CONFLICT (product_name, provider) DO UPDATE SET
+                    interest_rate = EXCLUDED.interest_rate,
+                    min_income = EXCLUDED.min_income,
+                    min_credit_score = EXCLUDED.min_credit_score,
+                    max_credit_score = EXCLUDED.max_credit_score,
+                    min_age = EXCLUDED.min_age,
+                    max_age = EXCLUDED.max_age,
+                    employment_required = EXCLUDED.employment_required,
+                    max_amount = EXCLUDED.max_amount,
+                    min_amount = EXCLUDED.min_amount,
+                    tenure_months = EXCLUDED.tenure_months,
+                    url = EXCLUDED.url,
+                    eligibility_criteria = EXCLUDED.eligibility_criteria,
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.executemany(insert_query, products_data)
+            return cursor.rowcount
+
+    def get_users_for_matching(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get users that need matching"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT u.* FROM users u
+                WHERE u.updated_at > COALESCE(
+                    (SELECT MAX(created_at) FROM matches m WHERE m.user_id = u.user_id),
+                    '1970-01-01'::timestamp
+                )
+                ORDER BY u.updated_at DESC
+            """
+            
+            if limit:
+                query += f" LIMIT {limit}"
+                
+            cursor.execute(query)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_loan_products(self) -> List[Dict[str, Any]]:
+        """Get all loan products"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT * FROM loan_products ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_matches_batch(self, matches_data: List[Dict[str, Any]]) -> int:
+        """Insert multiple matches"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO matches (user_id, product_id, match_score, match_reasons)
+                VALUES (%(user_id)s, %(product_id)s, %(match_score)s, %(match_reasons)s)
+                ON CONFLICT (user_id, product_id) DO UPDATE SET
+                    match_score = EXCLUDED.match_score,
+                    match_reasons = EXCLUDED.match_reasons,
+                    created_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.executemany(insert_query, matches_data)
+            return cursor.rowcount
+
+    def get_user_matches(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get matches for a specific user"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT m.*, lp.product_name, lp.provider, lp.interest_rate, 
+                       lp.min_amount, lp.max_amount, lp.tenure_months, lp.url
+                FROM matches m
+                JOIN loan_products lp ON m.product_id = lp.id
+                WHERE m.user_id = %s
+                ORDER BY m.match_score DESC
+            """
+            
+            cursor.execute(query, (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_users_with_new_matches(self, since_hours: int = 24) -> List[Dict[str, Any]]:
+        """Get users with new matches for notification"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT DISTINCT u.user_id, u.email, u.monthly_income, u.credit_score,
+                       COUNT(m.id) as match_count
                 FROM users u
                 JOIN matches m ON u.user_id = m.user_id
-                JOIN loan_products lp ON m.product_id = lp.id
-                ORDER BY m.match_score DESC
-            """)
+                WHERE m.created_at > NOW() - INTERVAL '%s hours'
+                GROUP BY u.user_id, u.email, u.monthly_income, u.credit_score
+                ORDER BY match_count DESC
+            """
             
-            # Processing status view
+            cursor.execute(query, (since_hours,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def log_processing_operation(self, batch_id: str, operation: str, status: str, 
+                               records_processed: int = 0, errors: Optional[Dict] = None):
+        """Log processing operations"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
             cursor.execute("""
-                CREATE OR REPLACE VIEW processing_status_view AS
-                SELECT 
-                    batch_id,
-                    operation,
-                    status,
-                    records_processed,
-                    errors,
-                    created_at,
-                    ROW_NUMBER() OVER (PARTITION BY batch_id, operation ORDER BY created_at DESC) as rn
-                FROM processing_logs
-            """)
+                INSERT INTO processing_logs (batch_id, operation, status, records_processed, errors)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (batch_id, operation, status, records_processed, json.dumps(errors) if errors else None))
+
+    def get_processing_status(self, batch_id: str) -> List[Dict[str, Any]]:
+        """Get processing status for a batch"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            conn.commit()
-            logger.info("Database views created successfully")
+            cursor.execute("""
+                SELECT * FROM processing_logs
+                WHERE batch_id = %s
+                ORDER BY created_at DESC
+            """, (batch_id,))
             
-        except psycopg2.Error as e:
-            conn.rollback()
-            logger.error(f"Failed to create views: {e}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
-    
-    def verify_setup(self):
-        """Verify that the database setup is correct"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
+            return [dict(row) for row in cursor.fetchall()]
+
+    def execute_optimized_matching_query(self, min_income: float, min_credit_score: int, 
+                                       max_credit_score: int, age: int, employment_status: str) -> List[Dict[str, Any]]:
+        """Execute optimized SQL query for pre-filtering loan products"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT * FROM loan_products 
+                WHERE (min_income IS NULL OR min_income <= %s)
+                AND (min_credit_score IS NULL OR min_credit_score <= %s)
+                AND (max_credit_score IS NULL OR max_credit_score >= %s)
+                AND (min_age IS NULL OR min_age <= %s)
+                AND (max_age IS NULL OR max_age >= %s)
+                AND (employment_required = FALSE OR %s IN ('employed', 'self-employed'))
+                ORDER BY interest_rate ASC
+            """
+            
+            cursor.execute(query, (min_income, min_credit_score, max_credit_score, age, age, employment_status))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_users_paginated(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get users with pagination"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT * FROM users 
+                ORDER BY created_at DESC 
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+            
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_user(self, user_data: Dict[str, Any]) -> str:
+        """Insert a single user and return user_id"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO users (user_id, email, monthly_income, credit_score, employment_status, age)
+                VALUES (%(user_id)s, %(email)s, %(monthly_income)s, %(credit_score)s, %(employment_status)s, %(age)s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    email = EXCLUDED.email,
+                    monthly_income = EXCLUDED.monthly_income,
+                    credit_score = EXCLUDED.credit_score,
+                    employment_status = EXCLUDED.employment_status,
+                    age = EXCLUDED.age,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING user_id
+            """
+            
+            cursor.execute(insert_query, user_data)
+            return cursor.fetchone()[0]
+
+    def get_users_by_ids(self, user_ids: List[str]) -> List[Dict[str, Any]]:
+        """Get users by their IDs"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            placeholders = ','.join(['%s'] * len(user_ids))
+            query = f"""
+                SELECT * FROM users 
+                WHERE user_id IN ({placeholders})
+            """
+            
+            cursor.execute(query, user_ids)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_match(self, match_data: Dict[str, Any]) -> int:
+        """Insert a single match"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            insert_query = """
+                INSERT INTO matches (user_id, product_id, match_score, match_reasons)
+                VALUES (%(user_id)s, %(product_id)s, %(match_score)s, %(match_reasons)s)
+                ON CONFLICT (user_id, product_id) DO UPDATE SET
+                    match_score = EXCLUDED.match_score,
+                    match_reasons = EXCLUDED.match_reasons,
+                    created_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.execute(insert_query, match_data)
+            return cursor.rowcount
+
+    def test_connection(self) -> bool:
+        """Test database connection"""
         try:
-            logger.info("Verifying database setup...")
-            
-            # Check tables exist
-            tables = ['users', 'loan_products', 'matches', 'processing_logs', 'email_notifications']
-            for table in tables:
-                cursor.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", (table,))
-                exists = cursor.fetchone()[0]
-                if exists:
-                    logger.info(f"✅ Table '{table}' exists")
-                else:
-                    logger.error(f"❌ Table '{table}' does not exist")
-                    return False
-            
-            # Check sample data
-            cursor.execute("SELECT COUNT(*) FROM loan_products")
-            product_count = cursor.fetchone()[0]
-            logger.info(f"✅ Found {product_count} loan products")
-            
-            cursor.execute("SELECT COUNT(*) FROM users")
-            user_count = cursor.fetchone()[0]
-            logger.info(f"✅ Found {user_count} users")
-            
-            # Check views
-            views = ['user_matches_view', 'processing_status_view']
-            for view in views:
-                cursor.execute("SELECT EXISTS (SELECT FROM information_schema.views WHERE table_name = %s)", (view,))
-                exists = cursor.fetchone()[0]
-                if exists:
-                    logger.info(f"✅ View '{view}' exists")
-                else:
-                    logger.error(f"❌ View '{view}' does not exist")
-                    return False
-            
-            logger.info("✅ Database setup verification completed successfully")
-            return True
-            
-        except psycopg2.Error as e:
-            logger.error(f"Failed to verify setup: {e}")
-            return False
-        finally:
-            cursor.close()
-            conn.close()
-    
-    def run_setup(self):
-        """Run the complete database setup"""
-        try:
-            logger.info("Starting database setup...")
-            
-            # Create database
-            self.create_database()
-            
-            # Create tables
-            self.create_tables()
-            
-            # Insert sample data
-            self.insert_sample_data()
-            
-            # Create views
-            self.create_views()
-            
-            # Verify setup
-            if self.verify_setup():
-                logger.info("🎉 Database setup completed successfully!")
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
                 return True
-            else:
-                logger.error("❌ Database setup verification failed")
-                return False
-                
         except Exception as e:
-            logger.error(f"Database setup failed: {e}")
+            logger.error(f"Database connection test failed: {str(e)}")
             return False
 
-def main():
-    """Main function"""
-    print("🚀 Loan Eligibility Engine - Database Setup")
-    print("=" * 50)
-    
-    # Check environment variables
-    required_vars = ['POSTGRES_HOST', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        print("❌ Missing required environment variables:")
-        for var in missing_vars:
-            print(f"   - {var}")
-        print("\nPlease set these variables in your .env file or environment.")
-        sys.exit(1)
-    
-    # Run setup
-    setup = DatabaseSetup()
-    success = setup.run_setup()
-    
-    if success:
-        print("\n✅ Database setup completed successfully!")
-        print("\nNext steps:")
-        print("1. Start the n8n workflows")
-        print("2. Upload your first CSV file")
-        print("3. Monitor the system through the web UI")
-    else:
-        print("\n❌ Database setup failed!")
-        sys.exit(1)
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get system statistics"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            stats = {}
+            
+            # Total users
+            cursor.execute("SELECT COUNT(*) as count FROM users")
+            stats['total_users'] = cursor.fetchone()['count']
+            
+            # Total products
+            cursor.execute("SELECT COUNT(*) as count FROM loan_products")
+            stats['total_products'] = cursor.fetchone()['count']
+            
+            # Total matches
+            cursor.execute("SELECT COUNT(*) as count FROM matches")
+            stats['total_matches'] = cursor.fetchone()['count']
+            
+            # Recent matches (last 24 hours)
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM matches 
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+            """)
+            stats['recent_matches'] = cursor.fetchone()['count']
+            
+            return stats
 
-if __name__ == "__main__":
-    main()
+    def get_recent_matches(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent matches for display"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+                SELECT m.*, u.email, lp.product_name, lp.provider, lp.interest_rate
+                FROM matches m
+                JOIN users u ON m.user_id = u.user_id
+                JOIN loan_products lp ON m.product_id = lp.id
+                ORDER BY m.created_at DESC
+                LIMIT %s
+            """
+            
+            cursor.execute(query, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
