@@ -1,10 +1,14 @@
 import os
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import json
 import logging
 from typing import List, Dict, Any, Optional
+# Load environment variables from .env file
+load_dotenv()
+
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

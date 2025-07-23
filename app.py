@@ -10,6 +10,10 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import json
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables first
+load_dotenv()
 
 # Add the lambda_function directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'lambda_function'))
@@ -20,10 +24,6 @@ from utils import validate_user_data, calculate_match_score, generate_match_reas
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
