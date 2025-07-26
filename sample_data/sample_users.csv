@@ -1,0 +1,16 @@
+user_id,email,monthly_income,credit_score,employment_status,age
+USR001,john.doe@email.com,5500,720,Full-time employed,32
+USR002,jane.smith@email.com,4200,680,Full-time employed,28
+USR003,mike.johnson@email.com,6800,750,Self-employed,35
+USR004,sarah.wilson@email.com,3800,620,Part-time employed,26
+USR005,david.brown@email.com,7200,780,Full-time employed,41
+USR006,lisa.davis@email.com,4500,660,Full-time employed,29
+USR007,robert.miller@email.com,5200,700,Full-time employed,33
+USR008,emily.garcia@email.com,3200,590,Student,22
+USR009,james.martinez@email.com,8500,800,Full-time employed,45
+USR010,maria.rodriguez@email.com,4800,710,Full-time employed,31
+USR011,william.anderson@email.com,6200,740,Self-employed,38
+USR012,jennifer.taylor@email.com,3600,580,Part-time employed,24
+USR013,christopher.thomas@email.com,7800,820,Full-time employed,42
+USR014,amanda.jackson@email.com,4100,650,Full-time employed,27
+USR015,matthew.white@email.com,5800,730,Full-time employed,36

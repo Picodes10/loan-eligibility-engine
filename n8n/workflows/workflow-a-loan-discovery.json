@@ -1,0 +1,159 @@
+{
+  "name": "Workflow A: Loan Product Discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "value": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Loan Product Discovery Workflow\n// This workflow runs daily to discover new loan products\n\nconst axios = require('axios');\n\n// Set up the discovery process\nconst discoveryData = {\n  workflow_type: 'loan_discovery',\n  timestamp: new Date().toISOString(),\n  scheduled: true\n};\n\n// Log the start of discovery\nconsole.log('Starting loan product discovery workflow');\n\nreturn [\n  {\n    json: discoveryData\n  }\n];"
+      },
+      "name": "Initialize Discovery",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/api/run-discovery",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "name": "Execute Python Scraper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.success}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log successful discovery\nconst result = $input.all()[0].json;\n\nconsole.log(`Loan discovery completed successfully:`);\nconsole.log(`- Products discovered: ${result.products_discovered}`);\nconsole.log(`- Products saved: ${result.products_saved}`);\n\n// Prepare notification data\nconst notificationData = {\n  type: 'discovery_success',\n  products_discovered: result.products_discovered,\n  products_saved: result.products_saved,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: notificationData }];"
+      },
+      "name": "Log Success",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log discovery failure\nconst result = $input.all()[0].json;\n\nconsole.error(`Loan discovery failed:`);\nconsole.error(`Error: ${result.error}`);\n\n// Prepare error notification\nconst errorData = {\n  type: 'discovery_error',\n  error: result.error,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: errorData }];"
+      },
+      "name": "Log Error",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Initialize Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Discovery": {
+      "main": [
+        [
+          {
+            "node": "Execute Python Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Python Scraper": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "1"
+}

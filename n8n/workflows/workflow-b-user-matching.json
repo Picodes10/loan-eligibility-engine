@@ -1,0 +1,238 @@
+{
+  "name": "Workflow B: User-Loan Matching",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "user-matching",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "user-matching-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// User-Loan Matching Workflow\n// Triggered when CSV processing is complete or manual trigger\n\nconst webhookData = $input.all()[0].json;\n\nconsole.log('User-Loan Matching workflow triggered');\nconsole.log('Webhook data received:', JSON.stringify(webhookData, null, 2));\n\n// More flexible validation - accept different event types\nconst validEventTypes = ['csv_processed', 'manual_trigger', 'test_trigger'];\nconst eventType = webhookData.event_type || 'manual_trigger';\n\nconsole.log(`Event type: ${eventType}`);\n\n// Only validate if event_type is provided and not in valid list\nif (webhookData.event_type && !validEventTypes.includes(webhookData.event_type)) {\n  console.log(`Warning: Unexpected event type '${webhookData.event_type}', proceeding anyway`);\n}\n\n// Handle different data structures\nconst usersProcessed = webhookData.users_processed || webhookData.count || 0;\nconst usersAdded = webhookData.users_added || webhookData.new_users || 0;\n\nconsole.log(`Users processed: ${usersProcessed}`);\nconsole.log(`Users added: ${usersAdded}`);\n\n// Skip if explicitly told to skip or no data to process\nif (webhookData.skip_matching === true) {\n  console.log('Skipping matching as requested');\n  return [{\n    json: {\n      skip_matching: true,\n      reason: 'Explicitly skipped'\n    }\n  }];\n}\n\n// Prepare matching request\nconst matchingData = {\n  workflow_type: 'user_matching',\n  trigger_event: eventType,\n  users_to_process: usersProcessed,\n  users_added: usersAdded,\n  timestamp: new Date().toISOString(),\n  webhook_data: webhookData\n};\n\nconsole.log('Proceeding with matching data:', JSON.stringify(matchingData, null, 2));\n\nreturn [{ json: matchingData }];"
+      },
+      "name": "Process Webhook",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.skip_matching}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Should Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/api/run-matching",
+        "options": {
+          "timeout": 600000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "name": "Execute Matching Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        900,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Skip matching - log and exit\nconst data = $input.all()[0].json;\n\nconsole.log(`Skipping matching: ${data.reason}`);\n\nreturn [{\n  json: {\n    workflow_completed: true,\n    skipped: true,\n    reason: data.reason\n  }\n}];"
+      },
+      "name": "Skip Matching",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.success}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Check Matching Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Matching completed successfully\nconst result = $input.all()[0].json;\n\nconsole.log(`User-Loan matching completed successfully:`);\nconsole.log(`- Users processed: ${result.users_processed}`);\nconsole.log(`- Matches created: ${result.matches_created}`);\n\n// Prepare data for notification workflow\nconst notificationTrigger = {\n  workflow_type: 'trigger_notifications',\n  matching_completed: true,\n  users_processed: result.users_processed,\n  matches_created: result.matches_created,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: notificationTrigger }];"
+      },
+      "name": "Process Success",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Matching failed\nconst result = $input.all()[0].json;\n\nconsole.error(`User-Loan matching failed:`);\nconsole.error(`Error: ${result.error}`);\n\n// Log error but don't trigger notifications\nconst errorData = {\n  workflow_type: 'matching_error',\n  error: result.error,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: errorData }];"
+      },
+      "name": "Process Error",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/notification-trigger",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "name": "Trigger Notifications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Process Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Webhook": {
+      "main": [
+        [
+          {
+            "node": "Should Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Skip?": {
+      "main": [
+        [
+          {
+            "node": "Skip Matching",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute Matching Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Matching Engine": {
+      "main": [
+        [
+          {
+            "node": "Check Matching Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Matching Success": {
+      "main": [
+        [
+          {
+            "node": "Process Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Process Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Success": {
+      "main": [
+        [
+          {
+            "node": "Trigger Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "2"
+}
